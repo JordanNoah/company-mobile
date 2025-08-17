@@ -1,0 +1,32 @@
+name: company
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  auto_route: ^10.1.0+1
+  dio: ^5.9.0
+  flutter_dotenv: ^5.2.1
+  flutter_secure_storage: ^9.2.4
+  cookie_jar: ^4.0.8
+  dio_cookie_manager: ^3.3.0
+  path_provider: ^2.1.5
+  get: ^4.7.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  build_runner: ^2.4.0
+  auto_route_generator: ^10.1.0+1
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/
