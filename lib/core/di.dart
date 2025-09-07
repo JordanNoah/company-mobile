@@ -4,5 +4,5 @@ final http = Http();                 // <-- única instancia
 
 Future<void> initAppDependencies() async {
   await http.init();   
-  await http.normalizeRtCookiePath();
+  //await http.normalizeRtCookiePath();
 }

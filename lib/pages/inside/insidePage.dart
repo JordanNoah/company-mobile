@@ -4,7 +4,7 @@ import 'package:get/get.dart';
 
 // importa tus páginas reales
 import 'configurationPage.dart';
-import 'homePage.dart';
+import 'home/homePage.dart';
 import 'postPage.dart';
 import 'stadisticPage.dart';
 

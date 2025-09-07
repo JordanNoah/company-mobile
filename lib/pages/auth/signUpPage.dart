@@ -30,7 +30,7 @@ class _SignUpPageState extends State<SignUpPage> {
       icon: Icons.perm_identity,
       keyboard: TextInputType.number,
       digitsOnly: true,
-      maxLength: 10,
+      maxLength: 13,
       rules: [
         Rules.required('Este campo es obligatorio'),
         Rules.lengthIs(13, 'Debe tener 13 dígitos'),
@@ -138,14 +138,24 @@ class _SignUpPageState extends State<SignUpPage> {
         final refreshToken = res.refreshToken;
 
         if (accessToken.isNotEmpty) {
-          await AuthStorage.saveToken(accessToken);
+          await AuthStorage.saveAccessToken(accessToken);
         }
         if (refreshToken.isNotEmpty) {
           await AuthStorage.saveRefreshToken(
             refreshToken,
           ); // crea este método si quieres persistirlo
         }
-
+        final company = res.company; // tipo Company (o Map, según tu modelo)
+        final companyId = company.id.toString();
+        if (companyId.isNotEmpty) {
+          await AuthStorage.saveCompanyId(companyId);
+        }
+        // Si quieres tener todo el objeto disponible luego:
+        try {
+          // Si `company` es clase, conviértela a Map (p.ej. company.toJson()).
+          // si ya es Map, guárdalo directo:
+          await AuthStorage.saveCompanyJson((res.company).toJson());
+        } catch (_) {}
         if (!mounted) return;
         context.router.replaceAll([const InsideRoute()]);
       }

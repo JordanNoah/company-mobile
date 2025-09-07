@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:convert' show base64Decode, jsonDecode;
 import 'dart:io' show Directory;
+import 'package:company/models/session_info.dart';
+import 'package:company/utils/trait.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 typedef FromJson<T> = T Function(Map<String, dynamic> json);
 
@@ -21,20 +24,43 @@ class ApiException implements Exception {
 
 class Http {
   late final String baseUrl;
+  late final String _refreshPath; // p.ej. '/auth/refresh'
+  late final String _refreshBasePath; // p.ej. '/auth'
   late final Dio _dio;
+
+  // Estado de sesión
   String? _token;
   String? get accessToken => _token;
+
+  // Cache de sesión en memoria
+  SessionInfo? _sessionCache;
 
   int? lastStatusCode;
   Map<String, List<String>>? lastHeaders;
 
-  // ==== NEW: control de refresh concurrente ====
+  // Control de refresh concurrente
   Future<String?>? _refreshing;
+
+  // Cookies
   PersistCookieJar? _jar;
+
+  // Init guard
+  bool _initialized = false;
+
+  // Almacenamiento seguro del access token (solo móvil/desktop)
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   Http() {
     baseUrl = dotenv.get('API_BASE_URL', fallback: 'http://10.0.2.2:3000');
-    print('BASE_URL => ${baseUrl}');
+    // Permite configurar el path por .env si tu backend usa prefijos
+    _refreshPath = dotenv.get('REFRESH_PATH', fallback: '/auth/refresh');
+    // Base para el Path de la cookie (todo lo que empieza por aquí enviará la cookie)
+    _refreshBasePath = dotenv.get('REFRESH_BASE_PATH', fallback: '/auth');
+
+    print('BASE_URL => $baseUrl');
+    print('REFRESH_PATH => $_refreshPath');
+    print('REFRESH_BASE_PATH => $_refreshBasePath');
+
     _dio = Dio(
       BaseOptions(
         baseUrl: baseUrl,
@@ -44,7 +70,7 @@ class Http {
       ),
     );
 
-    // === Interceptor: Authorization + auto-refresh 401 ===
+    // Interceptor: Authorization + auto-refresh 401
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (opts, handler) {
@@ -57,7 +83,7 @@ class Http {
         onError: (e, handler) async {
           final status = e.response?.statusCode ?? 0;
           final alreadyRetried = e.requestOptions.extra['__retried__'] == true;
-          final isRefreshCall = e.requestOptions.path.endsWith('/auth/refresh');
+          final isRefreshCall = e.requestOptions.path.endsWith(_refreshPath);
           final noRetry = e.requestOptions.extra['noRetry'] == true;
 
           if (status == 401 && !alreadyRetried && !isRefreshCall && !noRetry) {
@@ -71,7 +97,7 @@ class Http {
                 return handler.resolve(clone);
               }
             } catch (_) {
-              // sigue al next
+              // cae al next
             }
           }
           handler.next(e);
@@ -84,14 +110,47 @@ class Http {
     );
   }
 
-  void setAuthToken(String token) => _token = token;
-  void clearAuthToken() => _token = null;
+  // ======== Init / ensureInit ========
 
-  // ========= PUBLIC HELPERS (opcional) =========
   Future<void> init() async {
+    if (_initialized) return;
+
+    // Montar CookieJar persistente
     final dir = await getApplicationSupportDirectory();
     _jar = PersistCookieJar(storage: FileStorage('${dir.path}/.cookies'));
-    _dio.interceptors.add(CookieManager(_jar!)); // << activa cookies para TODO
+    _dio.interceptors.add(CookieManager(_jar!));
+
+    // Rehidratar access token persistido (si existe)
+    if (!kIsWeb) {
+      final saved = await _storage.read(key: 'access_token');
+      if (saved != null && saved.isNotEmpty) {
+        _token = saved;
+      }
+    }
+
+    _initialized = true;
+  }
+
+  Future<void> _ensureInit() async {
+    if (!_initialized) {
+      await init();
+    }
+  }
+
+  // ======== Token helpers ========
+
+  void setAuthToken(String token) {
+    _token = token;
+    if (!kIsWeb) {
+      _storage.write(key: 'access_token', value: token);
+    }
+  }
+
+  void clearAuthToken() {
+    _token = null;
+    if (!kIsWeb) {
+      _storage.delete(key: 'access_token');
+    }
   }
 
   bool _isJwtValid(String? token, {int skewSeconds = 30}) {
@@ -114,8 +173,12 @@ class Http {
     }
   }
 
-  /// Llama en el arranque de la app para levantar sesión desde cookie `rt`.
+  // ======== Sesión ========
+
+  /// Llama al arranque de la app para levantar sesión desde cookie `rt`.
   Future<bool> bootstrapSession() async {
+    await _ensureInit();
+
     // 1) Si ya tengo un token válido, úsalo y no llames al backend
     if (_isJwtValid(_token)) {
       return true;
@@ -126,19 +189,72 @@ class Http {
     return access != null && access.isNotEmpty;
   }
 
+  /// Devuelve la sesión actual (cacheada). Hace refresh si hace falta.
+  Future<SessionInfo?> getSessionInfo() async {
+    await _ensureInit();
+
+    // Si ya hay cache, úsala
+    if (_sessionCache != null) return _sessionCache;
+
+    // Asegura access token válido (usa cookie rt si hace falta)
+    if (!_isJwtValid(_token)) {
+      final ok = await bootstrapSession();
+      if (!ok) return null;
+    }
+
+    // Llama a tu endpoint de sesión/perfil
+    // Ajusta la ruta y el "unwrap" según tu API
+    try {
+      // A) Si tu API responde { data: { ... } }
+      final (info, code) = await getJsonWithCode<SessionInfo>(
+        path: '/auth/me', // <--- AJUSTA si tu endpoint es otro
+        fromJson: (m) => SessionInfo.fromJson(m),
+        unwrap: 'data',
+      );
+      if (code == 200) {
+        _sessionCache = info;
+        return info;
+      }
+    } catch (_) {
+      // B) Si tu API responde plano: { ... }
+      try {
+        final (info, code) = await getJsonWithCode<SessionInfo>(
+          path: '/auth/me',
+          fromJson: (m) => SessionInfo.fromJson(m),
+          unwrap: null, // sin 'data'
+        );
+        if (code == 200) {
+          _sessionCache = info;
+          return info;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Acceso directo al companyId (contextId) desde la sesión
+  Future<String?> getCompanyId() async {
+    // 1) quick path desde el token (si viene en el JWT)
+    final fromToken = contextIdFromToken;
+    if (fromToken != null && fromToken.isNotEmpty) return fromToken;
+
+    // 2) si no está en el token, consulta /auth/me y cachea
+    final s = await getSessionInfo();
+    return s?.companyId;
+  }
+
   /// Intenta refrescar el access token (usa cookie HttpOnly `rt`).
   Future<String?> tryRefreshAccessToken() async {
+    await _ensureInit();
     try {
       final res = await _dio.post(
-        '/auth/refresh',
+        _refreshPath,
         options: Options(extra: {'skipAuth': true, 'noRetry': true}),
       );
       final access = (res.data is Map)
           ? res.data['accessToken'] as String?
           : null;
-      if (access != null) {
-        setAuthToken(access);
-      }
+      if (access != null) setAuthToken(access);
       return access;
     } catch (_) {
       return null;
@@ -147,14 +263,16 @@ class Http {
 
   /// Logout server + limpia token y cookies locales.
   Future<void> logout() async {
+    await _ensureInit();
     try {
       await _dio.post('/auth/logout');
     } catch (_) {}
     clearAuthToken();
+    _sessionCache = null; // <-- limpia cache de sesión
     await _clearCookies();
   }
 
-  // ========= REQUESTS =========
+  // ======== Requests ========
 
   Future<T> getJson<T>({
     required String path,
@@ -377,7 +495,7 @@ class Http {
     return res.statusCode ?? 0;
   }
 
-  // ========= Internos =========
+  // ======== Internos ========
 
   Future<T> _request<T>({
     required String method,
@@ -418,6 +536,8 @@ class Http {
     Map<String, dynamic>? query,
     Map<String, String>? headers,
   }) async {
+    await _ensureInit(); // 👈 garantiza CookieJar y token rehidratado
+
     try {
       final response = await _dio.request(
         path,
@@ -469,6 +589,15 @@ class Http {
 
   Dio get client => _dio;
 
+  Map<String, dynamic>? get sessionPayload => decodeJwt(_token);
+
+  String? get contextIdFromToken {
+    final payload = sessionPayload;
+    return payload?['companyId']?.toString();
+  }
+
+  // ======== Refresh ========
+
   Future<String?> _refreshAccessTokenOnce() async {
     _refreshing ??= _refreshAccessToken();
     try {
@@ -479,9 +608,10 @@ class Http {
   }
 
   Future<String?> _refreshAccessToken() async {
+    await _ensureInit();
     try {
       final res = await _dio.post(
-        '/auth/refresh',
+        _refreshPath,
         options: Options(extra: {'skipAuth': true, 'noRetry': true}),
       );
       final access = (res.data is Map)
@@ -496,8 +626,10 @@ class Http {
     }
   }
 
+  // ======== Cookies & Debug ========
+
   Future<void> _clearCookies() async {
-    if (kIsWeb) return; // en web no podemos borrar cookies HttpOnly
+    if (kIsWeb) return; // no se puede borrar HttpOnly en web
     try {
       final dir = await getApplicationSupportDirectory();
       final cookiesDir = Directory('${dir.path}/.cookies');
@@ -507,39 +639,71 @@ class Http {
     } catch (_) {}
   }
 
-  Future<void> normalizeRtCookiePath() async {
-    await this.debugRtCookieForRefresh();
-    final jar =
-        (client.interceptors.whereType<CookieManager>().first).cookieJar
-            as PersistCookieJar;
-
-    final uri = Uri.parse(baseUrl);
-    final cookies = await jar.loadForRequest(uri);
-    print('Cookies al iniciar: $cookies');
-    print('BASE_URL => ${uri}');
-    // elimina cualquier 'rt' con path distinto al correcto
-    final bad = cookies
-        .where((c) => c.name == 'rt' && c.path != '/api/v1/auth')
-        .toList();
-    if (bad.isNotEmpty) {
-      // Borrado simple: elimina todo el directorio de cookies y deja que el back re-setee,
-      // o rehidrata tú la correcta si guardas el refresh en secure storage.
-      final dir = await getApplicationSupportDirectory();
-      Directory('${dir.path}/.cookies').deleteSync(recursive: true);
-    }
+  /// Diagnóstico: imprime si hay access token y si es válido
+  Future<void> printSessionStatus() async {
+    await _ensureInit();
+    final hasAccess = _token != null && _token!.isNotEmpty;
+    final valid = _isJwtValid(_token);
+    // No imprimimos el token por seguridad
+    // ignore: avoid_print
+    print(
+      'Access token: ${hasAccess ? (valid ? "presente y válido" : "presente pero vencido") : "no presente"}',
+    );
   }
 
+  /// Diagnóstico: lista cookies aplicables al endpoint de refresh y verifica 'rt'
   Future<void> debugRtCookieForRefresh() async {
+    await _ensureInit();
     final jar =
-        (client.interceptors.whereType<CookieManager>().first).cookieJar
+        (_dio.interceptors.whereType<CookieManager>().first).cookieJar
             as PersistCookieJar;
 
     final origin = Uri.parse(baseUrl);
-    // Asegura que preguntas por la URL donde la cookie SÍ aplica:
-    final refreshUri = origin.replace(path: '/api/v1/auth/refresh');
+    final refreshUri = origin.replace(path: _refreshPath);
 
     final cookies = await jar.loadForRequest(refreshUri);
-    print('Cookies para /auth/refresh => $cookies');
+    // ignore: avoid_print
+    print('Cookies para ${refreshUri.path} => $cookies');
+    // ignore: avoid_print
     print('BASE_URL => $baseUrl');
+
+    final hasRt = cookies.any((c) => c.name == 'rt');
+    // ignore: avoid_print
+    print(hasRt ? '✅ Hay cookie rt' : '❌ No hay cookie rt');
+  }
+
+  /// Normaliza cookies 'rt' cuyo path no coincida con la base esperada.
+  /// Usa REFRESH_BASE_PATH (default '/auth') para decidir qué mantener.
+  Future<void> normalizeRtCookiePath() async {
+    await _ensureInit();
+    final jar =
+        (_dio.interceptors.whereType<CookieManager>().first).cookieJar
+            as PersistCookieJar;
+
+    final origin = Uri.parse(baseUrl);
+    final cookies = await jar.loadForRequest(
+      origin.replace(path: _refreshPath),
+    );
+    // ignore: avoid_print
+    print('Cookies al iniciar: $cookies');
+    // ignore: avoid_print
+    print('BASE_URL => $origin');
+
+    final bad = cookies
+        .where(
+          (c) =>
+              c.name == 'rt' && !(c.path == _refreshBasePath || c.path == '/'),
+        )
+        .toList();
+
+    if (bad.isNotEmpty) {
+      // Borrado sencillo: elimina todo el directorio de cookies y deja que el back re-setee
+      final dir = await getApplicationSupportDirectory();
+      Directory('${dir.path}/.cookies').deleteSync(recursive: true);
+      // ignore: avoid_print
+      print(
+        '🧹 CookieJar reseteado por path inconsistente de rt (esperado: $_refreshBasePath o "/").',
+      );
+    }
   }
 }

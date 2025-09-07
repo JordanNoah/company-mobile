@@ -11,6 +11,38 @@
 part of 'routes.dart';
 
 /// generated route for
+/// [BranchesTabPage]
+class BranchesTabRoute extends PageRouteInfo<void> {
+  const BranchesTabRoute({List<PageRouteInfo>? children})
+    : super(BranchesTabRoute.name, initialChildren: children);
+
+  static const String name = 'BranchesTabRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      return const BranchesTabPage();
+    },
+  );
+}
+
+/// generated route for
+/// [ChefsTabPage]
+class ChefsTabRoute extends PageRouteInfo<void> {
+  const ChefsTabRoute({List<PageRouteInfo>? children})
+    : super(ChefsTabRoute.name, initialChildren: children);
+
+  static const String name = 'ChefsTabRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      return const ChefsTabPage();
+    },
+  );
+}
+
+/// generated route for
 /// [ConfigurationPage]
 class ConfigurationRoute extends PageRouteInfo<void> {
   const ConfigurationRoute({List<PageRouteInfo>? children})
@@ -102,6 +134,22 @@ class PostRoute extends PageRouteInfo<void> {
     name,
     builder: (data) {
       return const PostPage();
+    },
+  );
+}
+
+/// generated route for
+/// [RestaurantTabPage]
+class RestaurantTabRoute extends PageRouteInfo<void> {
+  const RestaurantTabRoute({List<PageRouteInfo>? children})
+    : super(RestaurantTabRoute.name, initialChildren: children);
+
+  static const String name = 'RestaurantTabRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      return const RestaurantTabPage();
     },
   );
 }

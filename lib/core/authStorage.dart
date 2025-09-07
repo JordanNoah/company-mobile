@@ -1,30 +1,36 @@
+// lib/core/authStorage.dart
+import 'dart:convert';
+import 'package:company/models/company.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuthStorage {
-  static const _k = FlutterSecureStorage();
-  
-  static const _accessKey = 'access_token';
-  static const _refreshKey = 'refresh_token';
+  static const _storage = FlutterSecureStorage();
+  static const _kAccess = 'access_token';
+  static const _kRefresh = 'refresh_token';
+  static const _kCompanyId = 'company_id';
+  static const _kCompany = 'company_json';
 
-  // Guardar tokens
-  static Future<void> saveAccessToken(String token) =>
-      _k.write(key: _accessKey, value: token);
-
-  static Future<void> saveRefreshToken(String token) =>
-      _k.write(key: _refreshKey, value: token);
-
-  // Leer tokens
-  static Future<String?> getAccessToken() =>
-      _k.read(key: _accessKey);
-
-  static Future<String?> getRefreshToken() =>
-      _k.read(key: _refreshKey);
-
-  // Borrar tokens
+  // tokens
+  static Future<void> saveAccessToken(String v) => _storage.write(key: _kAccess, value: v);
+  static Future<void> saveRefreshToken(String v) => _storage.write(key: _kRefresh, value: v);
+  static Future<String?> getAccessToken() => _storage.read(key: _kAccess);
+  static Future<String?> getRefreshToken() => _storage.read(key: _kRefresh);
   static Future<void> clear() async {
-    await _k.delete(key: _accessKey);
-    await _k.delete(key: _refreshKey);
+    await _storage.delete(key: _kAccess);
+    await _storage.delete(key: _kRefresh);
+    await _storage.delete(key: _kCompanyId);
+    await _storage.delete(key: _kCompany);
   }
 
-  static Future<void> saveToken(String token) => saveAccessToken(token);
+  // company
+  static Future<void> saveCompanyId(String id) => _storage.write(key: _kCompanyId, value: id);
+  static Future<String?> getCompanyId() => _storage.read(key: _kCompanyId);
+
+  static Future<void> saveCompanyJson(Map<String, dynamic> company) =>
+      _storage.write(key: _kCompany, value: jsonEncode(company));
+  static Future<Company?> getCompanyJson() async {
+    final raw = await _storage.read(key: _kCompany);
+    if (raw == null) return null;
+    return companyFromJson(raw);
+  }
 }
